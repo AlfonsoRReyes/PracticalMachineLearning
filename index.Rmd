@@ -5,26 +5,872 @@ date: "11/10/2018"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+
+```{r setup, include = FALSE, error=TRUE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      comment = "#>", 
+                      error = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      # cache = TRUE,
+                      fig.align = 'center')
 ```
 
-## R Markdown
+\newpage
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+# Data Exploration
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+One of the first things we notice is the abundant number of NAs and blank cells in the train dataset.
 
-```{r cars}
-summary(cars)
+I tried to detect a pattern of this occurrence and found that two different kind of measurements are being tried to be combined in one dataframe. There are measurements that occur continuously, and other measurements that are dependent of the status of the variable `new_window`. This maybe a different type of sensor that activates on certain times, but it does not produce a continuous output like the rest.
+
+There are variables that have meaningful values only when the variable `new_window` takes the value of `yes`. When it is `no`, the variables are all blank or filled with NAs. This happens with 402 observations.
+
+Examples of these variables are:
+
+    kurtosis_roll_belt
+    skewness_roll_belt
+    max_yaw_belt
+    amplitude_roll_belt
+    var_total_accel_belt
+    stddev_roll_belt
+    var_accel_arm
+    stddev_yaw_arm
+    kurtosis_roll_arm
+    kurtosis_picth_arm
+    max_roll_arm
+    amplitude_roll_arm
+    kurtosis_roll_dumbbell
+    max_roll_dumbbell
+    var_accel_dumbbell
+    var_yaw_dumbbell
+    kurtosis_roll_forearm
+    skewness_yaw_forearm
+    ...
+    ...
+    ...
+    
+
+Variables related with `skewness_` and `kurtosis_` are also all blank unless the variable `new_window` is set to yes.
+
+One of the first ideas was to separate these NA/blank variables and turn them in key/value pairs (a tidy dataset) using dplyr function `gather`. Like so:
+
+    key                     value
+    kurtosis_roll_belt      5.587755
+    kurtosis_picth_belt     -1.29859
+    max_roll_belt           -94.3
+    amplitude_pitch_belt    0
+    amplitude_yaw_belt      0
+    avg_roll_belt           1.5
+    avg_yaw_belt            -94.4
+    ...
+    ...
+    
+This idea was not viable since it created more than a million rows with no apparent gain; we still had NAs from other variables that did not confirm to the size and frequency of the second sensor.
+    
+## Variables with #DIV/0!    
+There are few variables that contain all values #DIV/0!. Such as:
+
+    kurtosis_yaw_belt
+    skewness_yaw_belt
+    kurtosis_yaw_dumbbell
+    skewness_yaw_dumbbell
+    kurtosis_yaw_forearm
+    skewness_yaw_forearm
+    
+    
+From all the 19622 observations, there are 405 rows that have the `new_window` variable set to `yes`. This means that 405 observations that occur at a different frequency that the majority of measurements was causing a great number of NAs and blank cells.
+
+A second idea was detecting the abnormal values (NAs, blanks, #DIV/0!) in the training dataset, make an inventory, and compare it against the test set. One key question: were these variables with the abnormal values really included in the test dataset?
+
+
+## Blank/NA variables  detection
+1. Detect columns that contain mostly blanks
+2. Detect columns that contain mostly NAs
+
+## Detect #DIV/0! variables
+1. Detect columns that have all div0 values
+2. Detect columns that sometimes have div0 values
+
+
+## General characteristics of the training dataset
+1. Rows have a sequential index from 1 to 19622.
+2. The index column does not have a name
+3. There is a variable that turns on and off 402 unique measurements and seems to cause a great number of NAs and blanks in the rest of the variables.
+4. By removing these low ocurrance variables, we obtain a clean dataset, ready for machine learning.
+
+# Main strategy for this project
+The strategy followed to deal with abnormal values in the variables was this:
+
+1. Detect the variables that have blanks, NAs and division-by-zero and build an inventory, meaning a count of variables that have all, or mostly, NAs, blanks or #DIV/0!
+
+2. Make a vector of the names of the variables that we tagged as ``normal`. Normal variables are considered any variables that do no contain mostly NAs, blanks or #DIV/0! values. A variable may be totally NAs, but may not contain all blanks nor #DIV/0!.
+
+3. We start scanning the dataframe for patterns of occurance of NAs and blanks taking and analyzing the tip of the sampled dataframe. For instance, we could take 10% of the dataframe split and analyze it for presence of NAs or blanks.
+
+4. Create two functions to get the "health" of the sampled dataframe. The first function will interrogate for the health of every variable and count if it is NA, blank or div-0. The second function iterates through all the variables and produce the total count.
+
+5. At the end of this process, we get four categories of variables:
+
+* NAs
+* blanks
+* #DIV/0!
+* Normal, or none of the above
+
+6. We select the variables that are tagged as `normal`, then subtract them for the entire train dataset. We do the same with the test dataset. 
+
+7. Coincidentally, the variables that are tagged as normal in the train dataset are the same variables that are tagged as normal in the test dataset. And the opposite is true as well: variables that are NAs or blank in the train dataset also present the same characteristics in the test dataset.
+
+8. Once the "healthy" variables are in place, we proceed with some Feature Engineering where we make cyclical variables really cyclical by using the trigonometric functions since and cosine. Then, we remove the original variables, or any other that is constant, like the year.
+
+9. Finally, we apply the machine learning algorithms to the healthy train and test datasets.
+
+Load the main libraries:
+
+```{r}
+library(caret)
+library(dplyr)
+library(tictoc)
 ```
 
-## Including Plots
+# Load and Analyze the train dataset
+Read the train dataset and see the structure.
 
-You can also embed plots, for example:
+```{r load-train}
+train_raw <- read.csv(file = "./data/pml-training.csv", header = TRUE, 
+                      stringsAsFactors = FALSE)
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+glimpse(train_raw)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+> Notice the large quantity of variables with NA and blank character values at the tip of the train dataframe.
+
+## Plot of train dataset variables
+
+Take a look at the visual structure of the train dataset.
+Notice the variables with NAs.
+
+```{r plot-vars-train-raw,fig.width=20, fig.height=10}
+library(Amelia)
+train_raw %>% 
+    sample_n(1000) %>% 
+    missmap(rank.order = FALSE)
+```
+
+## Health of the train dataset
+If we take a sample of the train dataset we could see that there are some non-data values that repeat in different areas: 
+
+1. There are variables with NAs
+2. There are variables with blanks
+3. There are observations with `#DIV/0!`
+
+This is a sample near the tip of the train dataset:
+
+```{r rows.print=25}
+train_raw[10:30, 15:20]
+```
+
+# Load and Analyze the test dataset
+Read the test dataset. It is rather small with 20 observations but the same number of variables.
+
+```{r load-test}
+test_raw <- read.csv(file = "./data/pml-testing.csv", header = TRUE, 
+                      stringsAsFactors = FALSE)
+
+glimpse(test_raw)
+```
+
+> In the test dataset, we see more variables with NA than character blanks.
+
+## Plot of test dataset variables
+A visual representation of the test dataset gives us some clue about the similarity with the train dataset.
+
+```{r plot-vars-test-raw, fig.width=20, fig.height=10}
+library(Amelia)
+test_raw %>% 
+    missmap(rank.order = FALSE)
+```
+
+# Analysis of the variables health
+
+## Build a function to qualify a variable health
+This function will find what variables have NAs, blanks, #DIV/0!. Anything else we will considered as a **normal** variable.
+
+The function will return a vector of the names of the columns and the health of the variable. By health, we mean that the variable contains any of the non-desirable values (NAs, blanks, or #DIV/0!).
+
+```{r function-variable-health}
+# function that return the type of variable. There are four: 
+#     normal, is_na, blank and div_0
+
+get_variable_health <- function(df, col, row_depth=50) {
+    kum_df <- data.frame()
+    
+    for (i in 1:row_depth) {
+        blank <- FALSE; na <- FALSE; normal <- FALSE; div_0 <- FALSE
+        if (is.na(df[i, col])) {
+            is_na  <- TRUE
+            blank  <- FALSE
+            normal <- FALSE
+            div_0  <- FALSE
+        } else if (df[i, col] == "") {
+            blank  <- TRUE
+            is_na  <- FALSE
+            normal <- FALSE
+            div_0  <- FALSE
+        } else if (df[i, col] == "#DIV/0!") {
+            div_0  <- TRUE
+            is_na  <- FALSE
+            blank  <- FALSE
+            normal <- FALSE
+        } else {
+            normal <- TRUE
+            is_na  <- FALSE
+            blank  <- FALSE
+            div_0  <- FALSE
+        }
+        # create a dataframe of the health for one row
+        row <- data.frame(normal = normal, 
+                          blank = blank, 
+                          is_na = is_na, 
+                          div_0 = div_0)
+        # cumulate the row results
+        kum_df <- rbind(kum_df, row)
+    }
+    ap <- apply(kum_df, 2, sum)  # what is the total for each of the cases
+                                 # is_na, blank, normal, div_0
+    # get the name of the column with maximum value which tell us the most 
+    # predominant case. For instance, "#DIV/0!" occurs in some variables but
+    # they are sporadic, so we count the occurrences, and if it the greater sum
+    # if will be considered predominant in the variable.
+    names(which.max(ap))         
+}                                
+```
+
+
+## Iterate through columns to find the variable health status
+Now, we start iterating through every one of the variables and apply the function `get_variable_health()`. We constrain the detection to just the tip of the dataframe; we don't analyze all the observations at this time. To find how many observations are enough to give an opinion about the health of the variable, we use a formula which should give a representative chunk of the dataframe.
+
+$$  ceiling \Biggl( \sqrt \frac {nrow(dataframe)} {\log(nrow(dataframe))} \Biggl) $$
+
+This formula gives us about 45 rows to investigate the health of the variables in the train set, and 3 rows at the top of the test set. 
+
+We use this formula: `ceiling(sqrt(nrow(df) / log(nrow(df))))` \\
+
+```{r function-iterate-vars}
+# function to iterate all the variables in the dataframe
+iterate_vars <- function(df) {
+    # how many rows to look ahead
+    row_depth <- ceiling(sqrt(nrow(df) / log(nrow(df))))
+    var_health <- rep("", ncol(df))  # create vector to load results
+    var_names <- names(df)           # assign names for each element of the vector
+    
+    for (col in var_names) {
+        health <- get_variable_health(df, col, row_depth = row_depth)
+        ncol <- which(colnames(df) == col)  # get column number given its name
+        names(var_health)[ncol] <- col      # assign the name of the column to vector
+        var_health[ncol] <- health          # assign the health the variable
+        # cat(ncol, col, health, "\n")
+    }
+    var_health
+}
+```
+
+
+## Get the `normal` variables in the train set
+Iterate through the variables of the train set and get a health inventory.
+
+```{r train-health}
+train_var_health <- iterate_vars(train_raw)
+table(train_var_health)
+```
+
+Get the variables that are tagged as "normal" which are the variables that we want to keep:
+
+```{r}
+# train dataset with variables tagged as normal
+train_set_raw <- train_raw[, train_var_health == "normal"]
+```
+
+```{r fig.width=11, fig.height=6}
+# Visual representation of the clean dataset
+train_set_raw %>% 
+    sample_n(1000) %>% 
+    missmap(rank.order = FALSE)
+```
+
+## Taking random samples of the train dataset
+Because we want to know if the behavior at the tip of the dataset is the same anywhere in the dataset, we will take random samples of the dataset and apply the `iterate_vars()` function.
+
+## Taking a sample of 10% of the dataset
+
+```{r}
+# we take in chunks 10% of total number of rows
+train_var_health <- iterate_vars(sample_n(train_raw, 0.1 * nrow(train_raw)))
+table(train_var_health)
+```
+
+## Taking multiple samples from the train dataset
+We do the same thing again, but this time in automated mode. We will take random samples of the train dataset to confirm that the same health status of the variables is the same anywehere in the train dataset. The size of the sample is 10%:
+
+    sample_n(train_raw, 0.1 * nrow(train_raw))
+
+```{r take-train10-samples}
+# take ten random samples and find if the health of the variables is the same
+# on each sample
+for (i in 1:10) {
+    df <- sample_n(train_raw, 0.1 * nrow(train_raw))  # 10% of the dataset
+    # print(head(df))
+    # print(t(as.data.frame(table(iterate_vars(df)))), row.names = NULL)
+    print(table(iterate_vars(df)))
+}
+```
+
+> The result tell us that the finding at the tip of the training dataset is consistent with the what happen in other parts of the dataset, since we are taking random samples of the dataset.
+
+## Get normal variables in the test set
+No it is the turn of the test set. We apply the same functions to the test set getting the vector with the health for each variable.
+
+```{r test-health}
+test_var_health <- iterate_vars(test_raw)
+table(test_var_health)
+```
+
+And we only select the variables that are tagged as "normal".
+
+```{r}
+# test dataset with variables tagged as normal
+test_set_raw <- test_raw[, test_var_health == "normal"]
+```
+
+```{r fig.width=11, fig.height=6}
+# visual representation of the clean test dataset
+test_set_raw %>% 
+    missmap(rank.order = FALSE)
+```
+
+## Comparing the `normal` variables in the train and test datasets
+
+```{r}
+# variables in the train dataset tagged as normal only
+(train_var_normal <- train_var_health[train_var_health == "normal"])
+```
+
+```{r}
+# variables in the test dataset tagged as normal only
+(test_var_normal <- test_var_health[test_var_health == "normal"])
+```
+
+## Intersect and Outersect the train and test variables
+
+There are 59 variables that are similarly tagged as "normal" in the train and test datasets. We use the `intersect()` function to find what variables are commonly tagged as normal in both datasets.
+
+```{r}
+intersect(names(train_var_normal), names(test_var_normal))
+```
+
+And what are the variables that are not common to both datasets, train and test?
+
+```{r function-outersect}
+# function to find what variables are not common
+outersect <- function(x, y) {
+    c(
+    setdiff(x, y),
+    setdiff(y, x)
+    )
+}
+
+outersect(names(train_var_normal), names(test_var_normal))
+```
+
+> There are only two variables that are not common in the train and test datasets, and they are `r outersect(names(train_var_normal), names(test_var_normal))[1]` and `r outersect(names(train_var_normal), names(test_var_normal))[2]`, which is fine because they are the target variable in the train dataset, and problem identifier in the test, respectively.
+
+
+# Feature Engineering
+Now it's time to perform some feature engineering.
+
+## Generic function to perform feature engineering
+We will create a function that will perform the same actions on the train and test sets:
+
+1. Remove redundant or unneccesary variables, or variables which carry duplicate or no meaningful information.
+2. Extract the year, month, day, hour and minutes from the character variable named `cvtd_timestamp`.
+3. Convert the date to cyclical variables using sine and cosine functions.
+4. Remove intermediate variables at the end of the process.
+5. Remove constants or features that do not change. Example: `year`.
+
+```{r, function-feature-eng}
+
+do_feature_eng <- function(df) {
+    df %>% 
+    # remove unnecessary variables
+    select(-c(X, raw_timestamp_part_1, raw_timestamp_part_2)) %>% 
+    # convert date to numeric
+    mutate(
+        year   = as.integer(substr(cvtd_timestamp, 7, 11)),
+        day    = as.integer(substr(cvtd_timestamp, 1, 2)), 
+        month  = as.integer(substr(cvtd_timestamp, 4, 5)),
+        minute = as.integer(substr(cvtd_timestamp, 15, 16)),
+        hour   = as.integer(substr(cvtd_timestamp, 12, 13)) + minute / 60.0
+        ) %>% 
+    # convert month, day, hour to cyclical
+    mutate(
+        month_sin = sin((month - 1) * (2.0 * pi / 12)), 
+        month_cos = cos((month - 1) * (2.0 * pi / 12)),
+        day_sin   = sin(day * 2.0 * pi / 7), 
+        day_cos   = cos(day * 2.0 * pi / 7), 
+        hour_sin  = sin(hour * 2.0 * pi / 24), 
+        hour_cos  = cos(hour * 2.0 * pi / 24)
+        
+        ) %>% 
+    mutate(
+        user_name = as.factor(user_name)
+    ) %>% 
+    # { if ("classe" %in% names(.)) mutate(classe = as.factor(classe)) } %>% 
+        
+    # order of variables
+    select(user_name,  year, month, month_sin, month_cos,
+           day, day_sin, day_cos,
+           hour, minute, hour_sin, hour_cos,
+           everything()) %>% 
+    # remove one more unnecessary variables
+    select(-c(month, day, hour, minute)) %>%    # converted to cyclic
+    select(-new_window, -cvtd_timestamp) %>%       # not meaningful
+    # removing year because is constant or the same in the whole dataset
+    select(-year)
+}
+
+```
+
+## FE on the train dataset
+Apply feature engineering function to the train set:
+
+```{r train-FE}
+train_set <- do_feature_eng(train_set_raw)
+train_set$classe <- as.factor(train_set$classe) # convert class to factor
+dim(train_set)
+```
+
+## FE on the test dataset
+Apply feature engineering function to the test set:
+
+```{r test-FE}
+# the test set does not have a class feature
+test_set <- do_feature_eng(test_set_raw)
+dim(test_set)
+```
+
+## What about the dates?
+This is optional. Just trying to find any relationship between the dates where the measurements occurred in the train dataset versus those in the test.
+
+Find how many unique values of the time stamp `cvtd_timestamp` there are.
+
+```{r}
+unique(train_raw$cvtd_timestamp)
+```
+
+```{r}
+unique(test_raw$cvtd_timestamp)
+```
+
+```{r}
+intersect(unique(train_raw$cvtd_timestamp), unique(test_raw$cvtd_timestamp))
+```
+There are 11 timestamps of 20 that are common to both datasets.
+
+```{r}
+outersect(unique(train_raw$cvtd_timestamp), unique(test_raw$cvtd_timestamp))
+```
+
+And nine timestamps that are either in the train or test datasets but there are not common at all in both.
+
+
+
+# Run machine learning models
+These are the machine learning algorithms used:
+
+* K-Nearest Neighbors
+* Random Forest
+* Bagged CART
+* Single C5 Tree
+* Neural Networks
+
+## Run model with KNN
+Using K Nearest Neighbors algorithm for multiclass classification.
+
+```{r run-knn}
+# KNN train
+tic()
+set.seed(7)
+trainControl <- trainControl(method="cv", number=5)
+
+fit.knn <- train(classe~., data = train_set, 
+                 method = "knn", 
+                 metric = "Accuracy", 
+                 trControl = trainControl)
+# summarize fit
+print(fit.knn)
+
+(knn.pred <- predict(fit.knn, test_set[, -61]))
+table(knn.pred)
+toc()
+# B A B A A E D B A A B C B A E E A B B B
+# A B C D E 
+# 7 8 1 1 3 
+# Accuracy = 0.9279383  
+# 113.88 sec elapsed
+# 104.61
+```
+
+## Random Forest
+
+```{r eval=FALSE}
+train.x <- data.matrix(train_set[, -61])
+train.y <- train_set[, 61]
+
+set.seed(7)
+bestmtry <- tuneRF(train.x, train.y, stepFactor=1.5, improve=1e-5, ntree = 2000)
+print(bestmtry)
+# ntree mtry
+#  500   10
+# 1000   15
+# 2000   22
+```
+
+```{r run-rf}
+# https://machinelearningmastery.com/tune-machine-learning-algorithms-in-r
+
+# Random Forest: takes more than 30 minutes
+tic()
+set.seed(7)
+trainControl <- trainControl(method = "cv", number = 5)
+
+mtry <- sqrt(ncol(train_set))
+mtry <- 15
+tunegrid <- expand.grid(.mtry = mtry)
+
+
+fit.rf <- train(classe~., data = train_set, 
+                 method = "rf", 
+                 metric = "Accuracy", 
+                 tuneGrid = tunegrid,
+                 tuneLength = 15,
+                 ntree = 1000,
+                 trControl = trainControl,
+                allowParallel=TRUE)
+# summarize fit
+print(fit.rf)
+
+rf.pred <- predict(fit.rf, test_set[, -61])
+rf.pred
+table(rf.pred)
+toc()
+# [1] B A B A A E D B A A B C B A E E A B B B
+# Accuracy = 0.9952096  
+# 803.96 sec elapsed
+# acc       mtry    ntr  time   tuneL
+# 0.9986241  10     500  568.22  15
+# 0.998726   15    1000  288.09  15
+# 0.998726   15    1000  303.36  NA
+# 0.9989807  22    2000 1278.56  NA
+# 0.9980635   7.81   NA  280.75  15
+# 0.9987769  15    1000  572.12  15
+```
+
+## Bagged CART
+
+```{r run-treebag}
+# Bagged CART
+tic()
+set.seed(7)
+trainControl <- trainControl(method="cv", number=5)
+
+fit.treebag <- train(classe~., data = train_set, 
+                 method = "treebag", 
+                 metric = "Accuracy", 
+                 trControl = trainControl)
+# summarize fit
+print(fit.treebag)
+
+(treebag.pred <- predict(fit.treebag, test_set[, -61]))
+table(treebag.pred)
+# A B C D E 
+# 7 8 1 1 3 
+toc()
+# [1] B A B A A E D B A A B C B A E E A B B B
+# 73.3 sec elapsed
+# Accuracy   0.9954134 71.68 sec elapsed
+```
+
+## Single C5.0 Tree
+
+```{r run-c5tree}
+# Single C5.0 Tree
+tic()
+set.seed(7)
+trainControl <- trainControl(method="cv", number=5)
+
+fit.c5 <- train(classe~., data = train_set, 
+                 method = "C5.0Tree", 
+                 metric = "Accuracy", 
+                 # preProcess=c("center", "scale"),
+                 trControl = trainControl)
+# summarize fit
+print(fit.c5)
+
+(c5.pred <- predict(fit.c5, test_set[, -61]))
+table(c5.pred)
+
+# A B C D E 
+# 7 8 1 1 3
+#  [1] B A B A A E D B A A B C B A E E A B B B
+# 44.94 sec elapsed Accuracy 0.9887882  25.39 sec elapsed
+toc()
+```
+
+## Neural Networks with `mxnet`
+The last algorithm will be Neural Networks with `mxnet`.
+This happens to be the fastest from all the algorithms tested previously.
+What really takes time is finding the right parameters for the model. I am including a table measuring the time for different combination of the parameters. After tweaking some, I found out that the best activation was `relu`.
+
+The fact that `mxnet` gave the most accurate results at the shortest time, made possible to generate a table of results. With the other algorithms could have taken a very long time to get such table.
+
+### Neural Network with `mxnet` standalone
+In this case we convert the outcome to numeric, and then convert them back to character to show the results table.
+
+```{r run-mxnet-sa, eval=TRUE}
+# classification with mxnet 
+library(mxnet)
+
+# x part of data should be as a matrix type
+train.x <- data.matrix(train_set[, -61])
+train.y <- as.numeric(train_set[, 61]) - 1
+
+# Get activation parameters from: 
+# https://media.readthedocs.org/pdf/mxnet-test/latest/mxnet-test.pdf
+tic()
+mx.set.seed(0)
+model <- mx.mlp(train.x, train.y,      # multiple layer perceptron
+                hidden_node = 60, 
+                activation = "relu",   # "tanh", "sigmoid", "softrelu"
+                out_node = 5,                 
+                out_activation = "softmax", 
+                num.round = 242, 
+                array.batch.size = 550, 
+                learning.rate = 0.001, 
+                momentum = 0.9,
+                eval.metric = mx.metric.accuracy, 
+                array.layout = "rowmajor")
+toc()
+```
+
+### Table of Results for Neural Network, `mxnet` standalone
+
+```
+   nround act  bsize acc  lrate hidden time A B C D E
+     100 tanh  3000 0.834 0.01   60   3.65  7 6 2 2 3
+     100 tanh  4000 0.856 0.01   60   3.34  7 6 2 3 2 
+     100 tanh  5500 0.867 0.01   60   3.58  7 6 1 2 4
+     200 tanh  5500 0.888 0.01   60   6.95  7 5 1 4 3
+     400 tanh  5500 0.932 0.01   60  14.19  7 7 2 2 2 
+     600 tanh  5500 0.943 0.01   60  21.64  7 7 2 1 3 
+     600 tanh  6000 0.959 0.001  60  24.52  7 7 1 2 3
+     800 tanh  6000 0.962 0.001  65  33.78  7 7 1 2 3 
+     800 tanh  6000 0.953 0.001  55  31.89  7 7 1 2 3
+     800 tanh  6000 0.924 0.001  30  29.62  7 7 1 2 3 
+     800 tanh  1000 0.963 0.001  60  39.18  7 8 1 1 3
+     800 tanh  2000 0.971 0.001  60  32.16  7 8 1 1 3
+     800 tanh  1800 0.972 0.001  62  33.22  7 8 1 1 3 
+     800 tanh  1800 0.970 0.001  58  35.97  7 8 1 1 3   
+    1000 tanh  1800 0.977 0.0005 60  50.54  7 8 1 1 3  
+    1200 tanh  1800 0.978 0.001  60  52.25  7 8 1 1 3    
+    1500 tanh  1800 0.979 0.001  60  69.61  7 8 1 1 3 
+    1000 tanh  1800 0.977 0.001  60  43.06  7 8 1 1 3 
+     500 tanh  1800 0.960 0.001  60  20.02  7 8 1 1 3 
+     600 tanh  1800 0.964 0.001  60  26.00  7 8 1 1 3
+     400 tanh  1800 0.961 0.001  60  16.06  7 7 1 2 3
+     500 tanh  1800 0.960 0.0008 60  20.55  7 8 1 1 3
+     500 tanh  1800 0.960 0.002  60  20.63  8 7 1 1 3 
+    1200 tanh  1800 0.934 0.005  60  47.43  7 8 1 1 3
+     800 tanh  1700 0.971 0.001  60  34.27  7 7 1 2 3 
+     700 tanh  2000 0.968 0.001  60  30.99  7 8 1 1 3
+     600 tanh  3000 0.965 0.001  60  26.75  7 8 1 1 3
+     600 tanh  4000 0.962 0.001  60  22.88  7 8 1 1 3
+     300 relu  1800 0.986 0.001  60  11.29  7 8 1 1 3
+     242 relu   550 0.992 0.001  60  14.18  7 8 1 1 3
+     300 relu   800 0.990 0.001  60  16.94  7 8 1 1 3
+     255 relu   800 0.989 0.001  60  14.41  7 8 1 1 3
+     243 relu   800 0.989 0.001  60  14.18  7 8 1 1 3
+     300 relu   400 0.982 0.001  60  29.40  7 7 1 2 3
+     300 relu   200 0.962 0.001  60  55.07  7 8 1 1 3 
+     300 tanh  1800 0.951 0.001  60  12.41  7 8 1 1 3 
+     300 srelu 1800 0.881 0.001  60  25.89  7 7 1 2 3
+     
+lrate: learning rate; nround: number of iterations; 
+acc: accuracy; hid: hidden layers; time: time iterations; 
+bsize: batch size      
+```
+
+
+```{r eval=TRUE}
+# test predictors. exclude last column which is the identifier
+test.x <- data.matrix(test_set[, -61])
+
+# these are the correct labels of the target
+test.y <- c("B", "A", "B", "A", "A", "E", "D", "B", "A", "A", 
+            "B", "C", "B", "A", "E", "E", "A", "B", "B", "B")
+
+pred <- predict(model, test.x, array.layout = "rowmajor")
+pred.label <- max.col(t(pred)) - 1
+
+# convert integers of outcome back to letters
+pred.label.ltr <- LETTERS[pred.label + 1]
+
+# confusion matrix
+cfm <- confusionMatrix(as.factor(pred.label.ltr), as.factor(test.y))
+print(cfm)
+
+table(LETTERS[pred.label + 1])
+LETTERS[pred.label + 1]
+```
+
+
+```{r eval=FALSE}
+# read CSV with mxnet results
+mxnet_results <- read.csv(file = "mxnet.csv", stringsAsFactors = FALSE)
+```
+
+```{r eval=FALSE}
+# save mxnet results to RDA file
+save(mxnet_results, file = "mxnet.rda")
+```
+
+
+### Neural Network with `mxnet` and `caret`
+Since we will compare all the algorithms, we need to do some cross-validation and resampling with caret. We will call `mxnet` from `caret` to produce the output for the comparison. There are a couple of parameter that we used with mxnet that are not available in the standard `caret`, so we will make a customized model for running `mxnet` with caret.
+
+The parameters that cannot be sent from caret are:
+
+    array.batch.size = 550
+    out_activation = "softmax"
+    mx.init.Xavier (the initializer)
+    
+The code for this custom made method can be found in the file `custom_mxnet.R`.    
+
+```{r run-mxnet-custom}
+# using customized mxnet
+# with array.batch.size = 550, 
+library(mxnet)
+tic()
+mx.set.seed(0)
+source("custom_mxnet.R")
+
+# x part of data should be as a matrix type
+train.x <- data.matrix(train_set[, -61])
+train.y <- train_set[, 61]
+
+mlp_grid <- expand.grid(
+  layer1 = 60,
+  layer2 = 0,
+  layer3 = 0,
+  learning.rate = 0.00075,
+  momentum = 0.95,
+  dropout = 0,
+  activation = "relu"
+  )
+
+fit.mxnet <- train(x = train.x, y = train.y, 
+                   method = new.modelInfo, 
+                   trControl = trainControl(method = "cv", number = 5), 
+                   tuneGrid = mlp_grid, 
+                   num.round = 700
+                   ) 
+toc()
+```
+
+### Table of Results for Neural Network, `mxnet` with caret
+
+```
+  fac lrate   mag    nround acc      hid     time   mom  bsize
+  avg 0.00075 0.0003 1200  0.9849664 60x0x0  613.67 0.95  550
+  avg 0.00075 0.0003  700  0.9836917 60x0x0  242.61 0.95  750
+  avg 0.00075 0.0003 1200  0.9826220 60x0x0  242.61 0.95  750
+  
+  avg 0.00075 0.0003  700  0.9825182 60x0x0  334.42 0.95  550
+  avg 0.0007  0.0003  700  0.9817039 60x0x0  308.65 0.95  550
+  
+  avg 0.00075 0.0003  700  0.9809403 60x0x0  247.2  0.95  700
+  avg 0.0008  0.0003  700  0.9804814 60x0x0  321.05 0.95  550
+  avg 0.0008  0.0003  700  0.9802274 60x0x0  182.26 0.95 1550
+  
+  avg 0.00075 0.0003  700  0.9774747 60x0x0  208.55 0.95  800
+  avg 0.00075 0.0003  700  0.9749770 60x0x0  208.55 0.95 1000
+  avg 0.001   0.0003  400  0.9727351 60x0x0  163.79 0.95  550
+  avg 0.001   0.0003  500  0.9732951 60x0x0  196.61 0.95  550
+  avg 0.001   0.0003  242  0.9631016 60x0x0  97.28  0.95  550
+  avg 0.001   0.0003  100  0.9552554 60x0x0  37.72  0.95  550
+  avg 0.0001  0.0003  700  0.9734995 60x0x0  37.16  0.95  550
+  avg 0.001   0.0003  700  0.9759978 60x0x0  291.11 0.95  550
+  avg 0.0001  0.0003  100  0.9531142 60x0x0  37.16  0.94  550
+  avg 0.0001  0.0003  100  0.9538278 60x0x0  36.95  0.95  550
+  avg 0.00075 0.0003  100  0.9572933 60x0x0  23.52  0.95 1550
+  avg 0.0001  0.0003  100  0.9350735 60x0x0  37.27  0.96  550
+  avg 0.0001  0.0003  100  0.7590508 60x0x0  36.93  0.99  550
+  avg 0.0001  0.0003  100  0.9499029 60x0x0  36.22  0.80  550
+  out 0.0001  0.0003  242  0.9703391 60x0x0
+  avg 0.0001  0.0003  242  0.9713581 60x0x0
+  avg 0.0001  0.0003  300  0.9751811 60x0x0
+  avg 0.0001  0.0003  100  0.9493936 60x0x0         0.90  550
+    
+  
+fac: factor type; lrate: learning rate; nround: num.round; 
+acc: accuracy; hid: hidden layers; time: time iterations; 
+mom: momentum; bsize: batch size  
+```  
+
+
+# Final comparison
+In this section we compare all the machine learning algorithms used. The comparison is made by using the caret function `resamples`.
+```{r resample-comparison}
+results <- resamples(list(
+    knn     = fit.knn,
+    c5tree  = fit.c5,
+    treebag = fit.treebag,
+    # nnet    = fit.nnet,
+    mxnet   = fit.mxnet
+))
+
+
+summary(results)
+```
+
+  
+```{r plot-boxwhisker}
+# box and whisker plots to compare models
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+bwplot(results, scales=scales)
+```  
+
+
+```{r plot-dotplot}
+# dot plots of accuracy
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+dotplot(results, scales=scales)
+```
+
+
+# Conclusion
+1. The prediction on the test dataset takes the following form: \
+    B A B A A E D B A A B C B A E E A B B B
+
+2. The prediction corresponds to the following combination, represented by the table: \
+
+```
+    A B C D E
+    7 8 1 1 3
+```    
+
+3. The most accurate machine learning algorithm is `treebag` with 0.995.
+
+4. The least accurate algorithm is `knn` with 0.928.
+
+
+

@@ -2,7 +2,9 @@
 title: "Practical Machine Learning Project"
 author: "Alfonso R. Reyes"
 date: "11/10/2018"
-output: html_document
+output:
+  html_document: default
+  pdf_document: default
 ---
 
 
@@ -12,7 +14,7 @@ knitr::opts_chunk$set(echo = TRUE,
                       error = TRUE, 
                       warning = FALSE, 
                       message = FALSE, 
-                      # cache = TRUE,
+                      cache = TRUE,
                       fig.align = 'center')
 ```
 
@@ -382,7 +384,7 @@ outersect <- function(x, y) {
 outersect(names(train_var_normal), names(test_var_normal))
 ```
 
-> There are only two variables that are not common in the train and test datasets, and they are `r outersect(names(train_var_normal), names(test_var_normal))[1]` and `r outersect(names(train_var_normal), names(test_var_normal))[2]`, which is fine because they are the target variable in the train dataset, and problem identifier in the test, respectively.
+There are only two variables that are not common in the train and test datasets.
 
 
 # Feature Engineering
@@ -440,7 +442,7 @@ do_feature_eng <- function(df) {
 
 ```
 
-## FE on the train dataset
+## Feature Engineering on the train dataset
 Apply feature engineering function to the train set:
 
 ```{r train-FE}
@@ -449,7 +451,7 @@ train_set$classe <- as.factor(train_set$classe) # convert class to factor
 dim(train_set)
 ```
 
-## FE on the test dataset
+## Feature Engineering on the test dataset
 Apply feature engineering function to the test set:
 
 ```{r test-FE}
@@ -868,9 +870,10 @@ dotplot(results, scales=scales)
     7 8 1 1 3
 ```    
 
-3. The most accurate machine learning algorithm is `treebag` with 0.995.
+3. The most accurate machine learning algorithm is `treebag` with 0.995 and **out of sample error** of 0.005.
 
-4. The least accurate algorithm is `knn` with 0.928.
+4. The least accurate algorithm is `knn` with 0.928 and **out of sample error** of 0.072.
+
 
 
 
